@@ -40,14 +40,21 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
+from google import genai
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_URL = (
-    f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.7-flash")
 AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 INSTRUMENT_ORDER = ["XAUUSD", "US100", "SP500", "EURUSD"]
+
+# genai.Client() auto-reads GEMINI_API_KEY (or GOOGLE_API_KEY) from the env.
+_client = None
+
+
+def gemini_client():
+    global _client
+    if _client is None:
+        _client = genai.Client()
+    return _client
 
 JSON_SCHEMA_HINT = """{
   "summary_ar": "<Telegram HTML string in Arabic>",
@@ -86,21 +93,7 @@ def require_env(name: str) -> str:
     return val
 
 
-# ── Gemini calls ──────────────────────────────────────────────────────────
-
-def _gemini(payload: dict, timeout: int = 120) -> dict:
-    r = requests.post(
-        f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-        headers={"content-type": "application/json"},
-        json=payload,
-        timeout=timeout,
-    )
-    if not r.ok:
-        raise RuntimeError(f"Gemini {r.status_code}: {r.text[:300]}")
-    data = r.json()
-    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-    return "".join(p.get("text", "") for p in parts)
-
+# ── Gemini calls (Interactions API, google-genai SDK) ─────────────────────
 
 RESEARCH_PROMPT = """Use your web search tool to gather the latest (last 3 days) market catalysts \
 and this week's high-impact economic calendar, then produce an institutional pre-market briefing \
@@ -126,14 +119,15 @@ afterwards, so prioritize accuracy and citations over polish."""
 
 def research_draft(report_date: str) -> str:
     """Gemini with Google Search grounding -> cited English draft."""
-    text = _gemini({
-        "contents": [{"parts": [{"text": RESEARCH_PROMPT.format(report_date=report_date)}]}],
-        "tools": [{"google_search": {}}],
-        "generationConfig": {"maxOutputTokens": 4000, "temperature": 0.2},
-    })
-    if not text.strip():
+    interaction = gemini_client().interactions.create(
+        model=GEMINI_MODEL,
+        input=RESEARCH_PROMPT.format(report_date=report_date),
+        tools=[{"type": "google_search"}],
+    )
+    text = (interaction.output_text or "").strip()
+    if not text:
         raise RuntimeError("research draft came back empty")
-    return text.strip()
+    return text
 
 
 STRUCTURE_SYSTEM = (
@@ -170,14 +164,17 @@ DRAFT:
     convo = f"{STRUCTURE_SYSTEM}\n\n{base_prompt}"
     for attempt in range(1, 4):
         try:
-            raw = _gemini({
-                "contents": [{"parts": [{"text": convo}]}],
-                "generationConfig": {
-                    "maxOutputTokens": 6000, "temperature": 0.3,
-                    "response_mime_type": "application/json",
-                },
-            })
-            payload = json.loads(raw)
+            interaction = gemini_client().interactions.create(
+                model=GEMINI_MODEL,
+                input=convo,
+                response_format={"mime_type": "application/json"},
+            )
+            raw = (interaction.output_text or "").strip()
+            # Defensive: strip any stray fences and isolate the JSON object,
+            # so a model that ignores the format hint still parses.
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            s, e = raw.find("{"), raw.rfind("}")
+            payload = json.loads(raw[s:e + 1] if s != -1 and e != -1 else raw)
         except json.JSONDecodeError as exc:
             last_error = f"invalid JSON: {exc}"
         except Exception as exc:  # noqa: BLE001

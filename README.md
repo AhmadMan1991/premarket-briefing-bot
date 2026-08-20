@@ -33,8 +33,9 @@ per instrument (XAUUSD, US100, SP500, EURUSD).
 ## One-time setup
 
 ### 1. Get a Gemini API key
-Create one at [Google AI Studio](https://aistudio.google.com/apikey). The
-default model is `gemini-2.5-flash` (override with the `GEMINI_MODEL` env/var).
+Create one at [Google AI Studio](https://aistudio.google.com/apikey). The bot
+uses the **google-genai** SDK (Interactions API); default model
+`gemini-3.7-flash` (override with the `GEMINI_MODEL` env/var).
 
 ### 2. Create the Telegram bot and get your chat ID
 1. Message [@BotFather](https://t.me/BotFather), run `/newbot`, follow the
