@@ -1,0 +1,38 @@
+name: Daily Pre-Market Briefing (Arabic)
+
+on:
+  schedule:
+    # 09:00 Europe/Amsterdam year-round. GitHub cron is UTC and DST-blind, so
+    # we fire at BOTH 07:00 UTC (= 09:00 CEST, summer) and 08:00 UTC (= 09:00
+    # CET, winter). briefing.py's gate_on_time() lets through only the run that
+    # is actually 09:xx Amsterdam and the other exits immediately — so exactly
+    # ONE briefing goes out each weekday, and there is no hourly schedule to
+    # misconfigure into spam.
+    - cron: '0 7 * * 1-5'
+    - cron: '0 8 * * 1-5'
+  workflow_dispatch:   # manual run — uses --force to bypass the time gate
+
+jobs:
+  briefing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Send briefing
+        env:
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        # Scheduled runs respect the 09:xx Amsterdam gate; a manual dispatch
+        # forces send so you can test any time.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python briefing.py --force
+          else
+            python briefing.py
+          fi
